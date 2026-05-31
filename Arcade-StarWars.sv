@@ -225,13 +225,14 @@ always @(*) begin
 	end
 end
 
+// Aspect menu = {0:Optimized, 1:Pixel Perfect} (Stretched removed).  ar==0 ->
+// auto-detected integer scale; else (ar==1) -> 1:1 pixel-perfect.  Both modes
+// HW-tested good; the dropped Stretched arm (was ar==1) is simply gone.
 assign VIDEO_ARX = (ar == 0) ? auto_arx :  // Optimized (auto-detect)
-                   (ar == 1) ? 13'd0 :     // Stretched
-                               13'h13D4;   // Pixel Perfect (1:1)
+                               13'h13D4;   // Pixel Perfect (1:1, 980)
 
 assign VIDEO_ARY = (ar == 0) ? auto_ary :  // Optimized (auto-detect)
-                   (ar == 1) ? 13'd0 :     // Stretched
-                               13'h12BC;   // Pixel Perfect (1:1)
+                               13'h12BC;   // Pixel Perfect (1:1, 700)
 
 // 120Hz MODE — SAFE ACTIVATION
 // The HPS restores saved status bits (including status[25]=120Hz ON)
@@ -295,12 +296,11 @@ end
 localparam CONF_STR = {
 	"Tempest;;",
 	"-;",
-	"OEF,Aspect ratio,Optimized,Stretched,Pixel Perfect;",
+	"OEF,Aspect ratio,Optimized,Pixel Perfect;",
 	"D2OP,120Hz (720p only),Off,On;",
 	"-;",
 	"O56,Rotate,0,90,180,270;",
 	"O7,Mirror,Off,On;",
-	"O89,Vector Scale,Half,3/4,Full;",
 	"OA,Frame Gate,On,Off;",
 	"OST,Persistence,3 (default),4,6,2;",
 	"-;",
@@ -485,7 +485,7 @@ tempest_sw tempest_core
 	.osd_120hz_mode(osd_120hz_mode),
 	.osd_rotate(status[6:5]),
 	.osd_flip(status[7]),
-	.osd_scale(status[9:8]),
+	.osd_scale(2'd0),              // Vector Scale fixed at Half (OSD option removed)
 	.osd_gate_bypass(status[10]),
 	.osd_persist(status[29:28]),   // Persistence: 0=3(default ~_n),1=4,2=6,3=2 lists/frame
 
