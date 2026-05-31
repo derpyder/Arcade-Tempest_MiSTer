@@ -23,7 +23,9 @@ module tempest_sw (
 	input  [1:0]  osd_rotate,       // HW bring-up: 0 / 90 / 180 / 270
 	input         osd_flip,         //             horizontal mirror
 	input  [1:0]  osd_scale,        //             0=/2 (safe), 1=x3/4, 2=x1
-	input         osd_gate_bypass, //             1 = bypass 60Hz gate (native passthrough)
+	input         osd_gate_bypass, //             1 = bypass the gate (native passthrough)
+	input  [1:0]  osd_persist,     // vector persistence: lists accumulated/buffer
+	                               //   0=3 (default,~_n), 1=4, 2=6, 3=2
 
 	// DDRAM framebuffer (straight pass-through to the emu module)
 	output        DDRAM_CLK,
@@ -174,48 +176,41 @@ module tempest_sw (
 	wire        rast_beam= (|tmp_rgb) && in_bounds;
 
 	// ====================================================================
-	// LIST-ALIGNED present-gate (rtl/present_gate.sv).  Replaces the vblank time-
-	// window gate, which starved the DDR clear (~10ms budget overran under shared-
-	// bus contention) AND cut the AVG list at a drifting phase (HDMI vs game clock)
-	// -> incomplete buffer every frame -> ALWAYS flicker (the regression from _n).
+	// PHOSPHOR-PERSISTENCE present-gate (rtl/present_gate.sv).  Emulates the real
+	// tube: accumulate N COMPLETE AVG lists (vggo->vggo) into one draw buffer with
+	// NO clear between them (the FB only clears on EOF), so N redraws pile into a
+	// union = a crude phosphor.  A beam dropped by DDR contention in one redraw is
+	// refilled by another (-> no intermittent dropped beams), and every list is
+	// complete (-> projectile tail never cut, no firing flash).  N = OSD-tunable
+	// "Persistence" (default 3 == the known-good "_n" accumulation).
 	//
-	// Instead: pace to 30Hz locked to FB_VBL (no beat) and capture EXACTLY one
-	// complete list bounded by vggo[n]->vggo[n+1] (the CPU's once-per-list $4800
-	// kick).  One whole list per buffer => no tail-drop (firing-safe, kills _n's
-	// projectile flicker), no smear, and EOF lands early enough to give the clear a
-	// ~24ms window (> _n's 21ms).  vggo, not avg_halted (avg_halted's short idle
-	// broke prior edge gates).  If vggo is ever dead on HW the gate times out and
-	// degrades to an _n-style time window, so it is never worse than _n.  The SW
-	// rasterizer + coordinate math above stay byte-for-byte UNMODIFIED.
+	// The FB swaps ready->display on its own scan-out vblank and shows the last
+	// completed buffer steadily between EOFs, so the per-EOF beam-off clear window
+	// is invisible (no dark flash) and free-running (no vblank lock) is fine: each
+	// presented union is identical frame-to-frame, so there is no beat to see.
+	// Uses vggo only (avg_halted's short idle broke prior edge gates).  Degrades to
+	// a time-window accumulator if vggo dies -> never black, never worse than _n.
+	// The SW rasterizer + coordinate math above stay byte-for-byte UNMODIFIED.
 	// ====================================================================
-	reg [2:0] vbl_sync_g = 3'd0;
-	always @(posedge clk_12) vbl_sync_g <= {vbl_sync_g[1:0], FB_VBL};
-	wire vbl_pulse = vbl_sync_g[1] & ~vbl_sync_g[2];   // FB_VBL rising edge, in clk_12 domain
-
 	// vggo (avg_go / $4800) rising edge = AVG list start.  tmp_start_frame is in the
 	// clk_12 domain (same as this gate and the FB FIFO write side) -> no new CDC.
 	reg vggo_d = 1'b0;
 	always @(posedge clk_12) vggo_d <= tmp_start_frame;
 	wire vggo_rise = tmp_start_frame & ~vggo_d;
 
-	// PRESENT_DIV = 2 -> 30Hz present: ~24ms clear budget even when firing (> _n's 21ms),
-	// each frame shown twice on the 60Hz panel = no flicker.  Set to 1 for 60Hz (smoother
-	// motion, ~12ms clear budget -- fine since one list is ~4ms, tighter under heavy fire).
-	localparam [7:0] PRESENT_DIV = 8'd2;
-
 	wire pg_beam_window, pg_eof, pg_start;
-	present_gate #(.PRESENT_DIV(PRESENT_DIV)) pgate (
-		.clk          (clk_12),
-		.reset        (reset),
-		.fb_vbl_pulse (vbl_pulse),
-		.vggo_rise    (vggo_rise),
-		.beam_window  (pg_beam_window),
-		.eof          (pg_eof),
-		.frame_start  (pg_start)
+	present_gate pgate (
+		.clk         (clk_12),
+		.reset       (reset),
+		.vggo_rise   (vggo_rise),
+		.persist     (osd_persist),
+		.beam_window (pg_beam_window),
+		.eof         (pg_eof),
+		.frame_start (pg_start)
 	);
 
-	// Bypass (OSD Frame Gate=Off) = native AVG passthrough (every ~240Hz list).
-	// Otherwise: present exactly ONE complete list (vggo->vggo) per 30Hz HDMI present.
+	// Bypass (OSD Frame Gate=Off) = native AVG passthrough (every ~240Hz list, no
+	// accumulation -- the diagnostic).  Otherwise: accumulate N complete lists/buffer.
 	wire gated_beam  = osd_gate_bypass ? rast_beam       : (rast_beam & pg_beam_window);
 	wire gated_done  = osd_gate_bypass ? tmp_frame_done  : pg_eof;
 	wire gated_start = osd_gate_bypass ? tmp_start_frame : pg_start;

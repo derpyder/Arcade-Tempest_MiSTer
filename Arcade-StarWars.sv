@@ -302,6 +302,7 @@ localparam CONF_STR = {
 	"O7,Mirror,Off,On;",
 	"O89,Vector Scale,Half,3/4,Full;",
 	"OA,Frame Gate,On,Off;",
+	"OST,Persistence,3 (default),4,6,2;",
 	"-;",
 	"DIP;",
 	"-;",
@@ -486,6 +487,7 @@ tempest_sw tempest_core
 	.osd_flip(status[7]),
 	.osd_scale(status[9:8]),
 	.osd_gate_bypass(status[10]),
+	.osd_persist(status[29:28]),   // Persistence: 0=3(default ~_n),1=4,2=6,3=2 lists/frame
 
 	// DDRAM Framebuffer Interface (proven SW DDR renderer)
 	.DDRAM_CLK(DDRAM_CLK),

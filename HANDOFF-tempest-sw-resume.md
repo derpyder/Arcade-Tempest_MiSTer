@@ -3,7 +3,56 @@
 **Single authoritative resume doc** (supersedes the layered notes in HANDOFF-SW-CHASSIS.md
 and RESEARCH-vector-fb-contract.md, which remain as detail/evidence).
 
-## LATEST (2026-05-31) — LIST-ALIGNED present-gate (the real flicker fix), SIM-VERIFIED
+## LATEST (2026-05-31 PM) — PHOSPHOR-PERSISTENCE present-gate (HW feedback in hand)
+
+### HW result on the list-aligned (one-list) build
+User flashed the one-list gate: **attract + in-game flash when firing; when NOT firing,
+intermittent dropped beams across the screen.** They asked the key question: does real
+Tempest rely on decay/ghosting/lingering frames, and can we use that to fight flicker?
+
+### Diagnosis (this is the correct model now)
+**YES — persistence is the whole mechanism.** A real Tempest redraws its WHOLE list
+~200-250x/sec (GHDL: 9 redraws/45 ms) and the CRT PHOSPHOR INTEGRATES them: any single
+redraw missing a beam is refilled by the next, and motion gets a soft trail. That is why a
+real tube never flickers. A DDR framebuffer has NO phosphor. The one-list gate presented
+exactly ONE redraw/frame -> every DDR-contention dropped beam shows for a whole frame with
+nothing to refill it (= the "intermittent dropped beams"), and a list cut mid-draw drops its
+tail (= firing flash). **The good "_n" build wasn't good because it was clean — it was good
+because its ~12 ms window happened to OVERDRAW ~3 redraws (accidental phosphor), which hid
+drops. It only flashed when firing because its fixed timer sliced the longer list mid-draw.**
+
+### Fix: accumulate N COMPLETE lists per displayed buffer (emulate the phosphor)
+The framebuffer only CLEARS on EOF. So `rtl/present_gate.sv` now holds the beam ON across
+**N complete lists (each bounded vggo->vggo) and emits EOF only after the Nth** -> N redraws
+pile into one buffer with no clear between = a union = crude phosphor. Dropped beams get
+refilled across redraws (no idle flicker); the Nth list is COMPLETE (no tail cut = no firing
+flash). Display is decoupled (FB swaps ready->display on its own scan-out vblank, shows the
+last completed union steadily), so the per-EOF beam-off clear window is invisible and
+free-running needs no vblank lock (each union is identical frame-to-frame = no beat).
+Degrades to a time-window accumulator if vggo dies (never black, never worse than _n).
+
+### NEW: live OSD "Persistence" knob (tune ghosting on the cab, no rebuild)
+CONF_STR `"OST,Persistence,3 (default),4,6,2;"` -> status[29:28] -> tempest_sw.osd_persist
+-> present_gate.persist. N = 3(default,≈_n) / 4 / 6 / 2. **This is the dial to find the
+flicker/smear sweet spot on HW.** (status[29:28] is free; the old SW m_dsw0/1 status bits are
+DEAD CODE here — Tempest reads DIPs via the MRA sw[] path, so no collision.)
+
+### Sim (ModelSim, `sim/fb/tb_gate2.sv`, all 6 PASS)
+lists/eof = exactly N for persist 0/1/2/3 (3/4/6/2); **FIRING (grown list) still accumulates 3
+COMPLETE lists, last list complete = no tail cut**; vggo-dead degrades (eof still pulses).
+(First run flagged "last list incomplete" — that was a TB off-by-one: eof is registered, seen
+1 clk after its trigger vggo; corrected by checking vggo_rise delayed 1. List-count metric was
+right throughout, independently proving the gate closes on a list boundary.)
+
+### Build / next
+`build_persist.log` compiling -> stage `releases/Arcade-Tempest_20260531b.rbf`. **HW test:
+sweep the Persistence knob (3->4->6) while firing; pick the lowest N with no flicker (higher N
+= more ghost/trail + more DDR clear pressure).** If even N=6 still drops beams when NOT firing,
+the residual is DDR-contention pixel loss in vector_fb_ddram (separate; persistence masks it).
+
+---
+
+## EARLIER 2026-05-31 — LIST-ALIGNED present-gate (one list/frame) [SUPERSEDED — removed phosphor]
 
 ### What was wrong (the regression `_n` -> `_s`/vbllock)
 The flicker is NOT a fundamental limit. `_n` (Arcade-Tempest_20260530n.rbf) was the best build

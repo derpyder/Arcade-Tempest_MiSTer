@@ -1,135 +1,127 @@
 // ============================================================================
-// tb_gate2.sv -- verify the REAL present_gate.sv (list-aligned Tempest gate).
+// tb_gate2.sv -- verify the REAL present_gate.sv (phosphor-persistence gate).
 //
 // Models the AVG as a continuous list generator: a list of LIST_PER cycles, with
-// vggo_rise (list start) at the wrap and "drawing" high for the first DRAW cycles
-// (the beam laying down pixels), idle for the rest.  FB_VBL pulses every VBL_PER.
+// vggo_rise (list start) at the wrap and "drawing" high for the first DRAW cycles.
 //
-// THE METRIC: drawing-cycles captured between consecutive eof pulses.  The gate
-// must hand the framebuffer EXACTLY one complete list per present, so this must
-// equal DRAW:
-//     == DRAW  -> GOOD: exactly one complete list (no drop, no smear)
-//     <  DRAW  -> PARTIAL (tail-drop = projectile flicker; what the old
-//                 time-window gate did when the list outgrew the window)
-//     >  DRAW  -> SMEAR (>one list, moving objects doubled)
+// What the gate must do now (accumulate N complete lists per displayed buffer):
+//   - Between consecutive EOFs it holds beam_window high across exactly N complete
+//     lists (N = nlists(persist)), then pulses eof.
+//   - The Nth (last) list is COMPLETE: eof coincides with a real vggo (list
+//     boundary), NEVER a mid-list timeout -> no tail-drop -> firing-safe.
+//   - frame_start pulses once per accumulation; exactly one eof per accumulation.
 //
-// Scenarios:
-//   NORMAL : list ~4ms, draw ~3ms          -> expect == DRAW
-//   FIRING : list grown (longer tail)       -> expect == DRAW_fire (NO tail-drop)
-//   DEAD   : vggo never fires               -> eof STILL fires (degrade, never
-//                                              black) and capture is bounded
-//   GLITCH : a stray vggo just after open   -> guard rejects it, == DRAW
+// METRIC per accumulation = vggo_rise events seen while beam_window high.  That
+// counts complete lists accumulated; must equal N for the selected persist.
 //
-// Params scaled /100 from real (clk 12MHz, FB_VBL 60Hz=200000cyc, list 4ms=48000)
-// so the sim is fast; ratios preserved, present_gate timeouts passed scaled.
-// (No SystemVerilog `string` -- ModelSim ASE rejects it as a task arg.)
+// Scenarios: persist 0/1/2/3 -> N 3/4/6/2 (NORMAL + FIRING list lengths), plus a
+// DEAD case (vggo never fires -> degrade: eof still pulses, never hangs).
+// (ModelSim ASE rejects SV `string` as a task arg -> use ints.)
 // ============================================================================
 `timescale 1ns/1ps
 module tb_gate2;
 	logic clk = 0; always #5 clk = ~clk;
 
-	localparam int VBL_PER = 2000;   // FB_VBL period (~60Hz-equiv); tick = 2*VBL = 30Hz
-	localparam int LIST_N  = 480;    // normal list period (~4ms-equiv)
-	localparam int DRAW_N  = 360;    // normal draw cycles (~3ms-equiv)
-	localparam int LIST_F  = 900;    // firing list period (grown)
-	localparam int DRAW_F  = 780;    // firing draw cycles (grown tail = projectiles)
-
-	localparam int KIND_EQ = 0, KIND_DEGRADE = 1;
+	localparam int LIST_N = 480;   // normal list period (~4ms-equiv @ /100 scale)
+	localparam int DRAW_N = 360;   // normal draw cycles
+	localparam int LIST_F = 900;   // firing list period (grown tail)
+	localparam int DRAW_F = 780;   // firing draw cycles
 
 	int  list_per = LIST_N;
 	int  draw_cyc = DRAW_N;
 	bit  vggo_en  = 1'b1;
-	bit  glitch_en= 1'b0;
 	bit  rst_stim = 1'b1;
 	bit  reset    = 1'b1;
-
-	// FB_VBL pulse generator
-	int  vblc = 0;
-	logic fb_vbl_pulse;
-	always @(posedge clk) begin
-		if (reset) begin vblc <= 0; fb_vbl_pulse <= 0; end
-		else begin
-			if (vblc >= VBL_PER-1) begin vblc <= 0; fb_vbl_pulse <= 1; end
-			else                   begin vblc <= vblc + 1; fb_vbl_pulse <= 0; end
-		end
-	end
+	logic [1:0] persist = 2'd0;
 
 	// AVG list generator
-	int  lc = 0;
+	int lc = 0;
 	always @(posedge clk) begin
 		if (rst_stim) lc <= 0;
 		else          lc <= (lc >= list_per-1) ? 0 : lc + 1;
 	end
 	wire drawing   = (lc < draw_cyc);
-	// vggo at list start; optional stray glitch 50 cyc after start (inside the guard)
-	wire vggo_rise = vggo_en & ((lc == 0) | (glitch_en & (lc == 30)));
+	wire vggo_rise = vggo_en & (lc == 0);
 
-	// DUT: the real present_gate, timeouts scaled /100
+	// DUT: real present_gate, timeouts scaled /100 so the TB is fast.
 	wire beam_window, eof, frame_start;
 	present_gate #(
-		.PRESENT_DIV   (8'd2),        // 30Hz present
-		.ARMED_TIMEOUT (20'd1440),    // ~12ms-equiv (> firing list period 900)
-		.MIN_CAP_GUARD (20'd60),      // ~0.5ms-equiv (rejects the lc==30 glitch)
-		.CAP_TIMEOUT   (20'd1440)     // ~12ms-equiv (> firing list period 900)
+		.BLANK_CYC     (20'd200),    // ~10ms-equiv beam-off (clear)
+		.ARMED_TIMEOUT (20'd1440),   // ~12ms-equiv (> firing list 900)
+		.CAP_TIMEOUT   (22'd7200)    // ~60ms-equiv (> N=6 firing lists)
 	) dut (
 		.clk(clk), .reset(reset),
-		.fb_vbl_pulse(fb_vbl_pulse), .vggo_rise(vggo_rise),
+		.vggo_rise(vggo_rise), .persist(persist),
 		.beam_window(beam_window), .eof(eof), .frame_start(frame_start)
 	);
 
-	// measurement: drawing-cycles captured per eof
-	int acc = 0, cap_at_eof = 0, neof = 0, nstart = 0;
-	always @(posedge clk) begin
-		if (reset) begin acc <= 0; cap_at_eof <= 0; neof <= 0; nstart <= 0; end
-		else begin
-			if (beam_window && drawing) acc <= acc + 1;
-			if (frame_start) nstart <= nstart + 1;
-			if (eof) begin cap_at_eof <= acc; acc <= 0; neof <= neof + 1; end
+	// measurement
+	// eof is REGISTERED in present_gate, so it is observed one clk AFTER the vggo_rise
+	// that triggers it.  Track vggo_rise delayed 1 cycle so "did eof land on a list
+	// boundary?" is checked correctly (vggo_rise_d is high the cycle eof is seen when
+	// the close was vggo-driven; both low => a real mid-list timeout = tail cut).
+	reg vggo_rise_d = 1'b0;
+	always @(posedge clk) vggo_rise_d <= vggo_rise;
+
+	int vggo_in_cap = 0;      // vggo seen while beam on, current accumulation
+	int lists_at_eof = 0;     // snapshot at eof
+	int neof = 0, nstart = 0;
+	bit eof_on_vggo = 1'b1;   // was every eof coincident (within 1 clk) with a vggo?
+	always @(posedge clk) if (!reset) begin
+		if (frame_start) nstart <= nstart + 1;
+		if (beam_window && vggo_rise) vggo_in_cap <= vggo_in_cap + 1;
+		if (eof) begin
+			lists_at_eof <= vggo_in_cap;     // # complete lists accumulated
+			vggo_in_cap  <= 0;
+			neof <= neof + 1;
+			if (vggo_en && !(vggo_rise || vggo_rise_d)) eof_on_vggo <= 1'b0; // mid-list = tail cut
 		end
 	end
 
 	int fails = 0;
 
-	task automatic run(input int scn, input int lp, input int dc,
-	                   input bit ve, input bit ge,
-	                   input int kind, input int expect_val);
+	task automatic run(input int scn, input logic [1:0] p, input int lp, input int dc,
+	                   input bit ve, input int expectN, input bit expect_complete);
 		int got;
 		begin
 			@(posedge clk); reset <= 1; rst_stim <= 1;
-			list_per <= lp; draw_cyc <= dc; vggo_en <= ve; glitch_en <= ge;
+			persist <= p; list_per <= lp; draw_cyc <= dc; vggo_en <= ve;
 			repeat (8) @(posedge clk);
+			eof_on_vggo = 1'b1;     // reset the "complete" tracker for this scenario
 			reset <= 0; rst_stim <= 0;
-			repeat (6*2*VBL_PER) @(posedge clk);     // reach steady state
-			got = cap_at_eof;
-			$display("[scn %0d] eof/captures=%0d starts=%0d captured-draw-cycles=%0d (one list=%0d)",
-			         scn, neof, nstart, got, dc);
-			if (kind == KIND_EQ) begin
-				if (got >= (expect_val*9)/10 && got <= (expect_val*11)/10)
-					$display("         PASS: ~one complete list (no drop, no smear)");
-				else if (got < expect_val) begin
-					$display("         FAIL: PARTIAL/tail-drop (expected ~%0d got %0d)", expect_val, got);
-					fails = fails + 1;
-				end else begin
-					$display("         FAIL: SMEAR (expected ~%0d got %0d)", expect_val, got);
-					fails = fails + 1;
-				end
-			end else begin // KIND_DEGRADE
-				if (neof >= 2 && got > 0 && got < 1440)
-					$display("         PASS: eof still fires (NOT black), capture bounded by timeout");
+			repeat (40000) @(posedge clk);     // many accumulations
+			got = lists_at_eof;
+			$display("[scn %0d] persist=%0d list=%0d draw=%0d  eof=%0d start=%0d  lists/eof=%0d (want %0d)  lastListComplete=%0b",
+			         scn, p, lp, dc, neof, nstart, got, expectN, eof_on_vggo);
+			if (ve) begin
+				if (got == expectN && eof_on_vggo == expect_complete && neof >= 3)
+					$display("         PASS");
 				else begin
-					$display("         FAIL: degrade broken (neof=%0d got=%0d)", neof, got);
+					$display("         FAIL%s%s%s",
+					         (got!=expectN)?" [wrong list count]":"",
+					         (eof_on_vggo!=expect_complete)?" [last list NOT complete = tail-drop]":"",
+					         (neof<3)?" [too few eofs]":"");
 					fails = fails + 1;
 				end
+			end else begin // DEAD: vggo never fires -> degrade, eof must still pulse
+				if (neof >= 2) $display("         PASS: degrade (eof still pulses, never black)");
+				else begin $display("         FAIL: degrade broken (neof=%0d)", neof); fails = fails + 1; end
 			end
 		end
 	endtask
 
 	initial begin
-		$display("scn1=NORMAL scn2=FIRING scn3=DEAD(degrade) scn4=GLITCH");
-		run(1, LIST_N, DRAW_N, 1'b1, 1'b0, KIND_EQ,      DRAW_N); // one ~4ms list/present
-		run(2, LIST_F, DRAW_F, 1'b1, 1'b0, KIND_EQ,      DRAW_F); // firing: no tail-drop
-		run(3, LIST_N, DRAW_N, 1'b0, 1'b0, KIND_DEGRADE, 0);      // vggo dead: never black
-		run(4, LIST_N, DRAW_N, 1'b1, 1'b1, KIND_EQ,      DRAW_N); // stray vggo rejected
+		$display("persist->N: 0->3(default) 1->4 2->6 3->2");
+		// NORMAL list length, each persistence setting
+		run(1, 2'd0, LIST_N, DRAW_N, 1'b1, 3, 1'b1);
+		run(2, 2'd1, LIST_N, DRAW_N, 1'b1, 4, 1'b1);
+		run(3, 2'd2, LIST_N, DRAW_N, 1'b1, 6, 1'b1);
+		run(4, 2'd3, LIST_N, DRAW_N, 1'b1, 2, 1'b1);
+		// FIRING (grown list): default persistence must STILL accumulate N COMPLETE
+		// lists with the last one complete -> the projectile tail is never cut.
+		run(5, 2'd0, LIST_F, DRAW_F, 1'b1, 3, 1'b1);
+		// DEAD vggo -> degrade
+		run(6, 2'd0, LIST_N, DRAW_N, 1'b0, 0, 1'b1);
 		$display("=====================================================");
 		if (fails == 0) $display("ALL GATE TESTS PASSED");
 		else            $display("GATE TESTS FAILED: %0d", fails);

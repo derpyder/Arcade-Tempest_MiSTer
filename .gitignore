@@ -56,5 +56,6 @@ sim/fb/trace.txt
 sim/fb/e.txt
 sim/fb/err_g2.txt
 sim/fb/summary_g2.txt
+sim/fb/RESULT.txt
 # archived intermediate build artifacts (kept locally, not in the repo)
 releases/_archive/
