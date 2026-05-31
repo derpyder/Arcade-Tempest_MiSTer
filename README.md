@@ -10,6 +10,11 @@ reusing its DDR3 vector framebuffer, display path, audio chain, and OSD.
 > superzapper, coins, and audio all confirmed, and the display is stable (see
 > [Vector presentation](#vector-presentation--the-flicker-fix)).
 
+> ⚠️ **ROMs required — not included.** This core does nothing without the Tempest
+> romset. You must supply **`tempest.zip`** (MAME `tempest`) in your MiSTer's
+> `games/mame/` folder. No ROMs are distributed here (Tempest is © 1981 Atari).
+> See [Install](#install).
+
 ---
 
 ## Why "Star Wars chassis"?
@@ -71,8 +76,10 @@ The fix is verified in simulation (`sim/fb/tb_gate2.sv`).
    `_Arcade/cores/` and rename it to **`Arcade-Tempest.rbf`** (keep exactly one
    `Arcade-Tempest*.rbf` there).
 2. Copy **`releases/Tempest.mra`** to `_Arcade/`.
-3. Put the Tempest romset **`tempest.zip`** (MAME `tempest`, the Rev-3 parent set)
-   in `games/mame/`. The MRA lists the exact ROM CRCs it expects.
+3. **Required:** put the Tempest romset **`tempest.zip`** (MAME `tempest`, the
+   Rev-3 parent set) in `games/mame/`. **The core will not run without it** — the
+   MRA loads the ROMs from this zip and lists the exact CRCs it expects. ROMs are
+   not included in this repo or release.
 
 Launch the MRA from the MiSTer arcade menu.
 
