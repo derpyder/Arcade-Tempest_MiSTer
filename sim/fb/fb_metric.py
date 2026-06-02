@@ -15,11 +15,11 @@ FRAME = "../../../Arcade-Tempest/sim/tempest_frame.txt"
 OUT   = sys.argv[1] if len(sys.argv) > 1 else "fb_out.txt"
 
 def mapx(ax):  # matches tempest_sw.sv orient C: fxs = 490 + rx (X not flipped)
-    cx = ax ^ 512; sx = cx >> 1; return 490 + (sx - 256)
-def mapy(ay):  # matches tempest_sw.sv orient C: fys = 350 - ry (flip Y, right-side-up)
-    cy = ay ^ 512; sy = cy >> 1; return 350 - (sy - 256)
+    cx = ax ^ 512; sx = (cx * 11) >> 4; return 490 + (sx - 352)   # FILL scale 11/16, centre 352
+def mapy(ay):  # matches tempest_sw.sv orient C: fys = 360 - ry (flip Y, right-side-up; FB 720)
+    cy = ay ^ 512; sy = (cy * 11) >> 4; return 360 - (sy - 352)   # FILL scale 11/16, centre 352
 def inb(x, y):
-    return 0 <= x < 980 and 0 <= y < 700
+    return 0 <= x < 980 and 0 <= y < 720
 
 # A pixel is VISIBLY lit only when Z = az[7:3] > 0  (chan = {Z,Z[4:2]} == 0 when Z==0).
 # So az 1..7 also render black AND erase in overwrite mode -> they are "movers", not golden.

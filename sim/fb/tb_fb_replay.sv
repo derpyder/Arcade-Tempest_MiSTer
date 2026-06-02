@@ -39,17 +39,17 @@ module tb_fb_replay;
 	function automatic int mapx(input int ax);
 		int cx, sx, scx, fxs;
 		cx  = ax ^ 512;          // {~ax[9], ax[8:0]} centre
-		sx  = cx >> 1;           // scale /2  (sc_num=2 -> cx*2>>2)
-		scx = sx - 256;          // - half (sc_num<<7 = 256)
+		sx  = (cx * 11) >> 4;    // FILL scale 11/16 (matches tempest_sw cxs=cx*11, sx=cxs[13:4])
+		scx = sx - 352;          // - half (512*11/16 = 352)
 		fxs = 490 + scx;         // X not flipped (matches tempest_sw fxs=490+rx; 490-scx mirrors text)
 		return fxs;
 	endfunction
 	function automatic int mapy(input int ay);
 		int cy, sy, scy, fys;
 		cy  = ay ^ 512;
-		sy  = cy >> 1;
-		scy = sy - 256;
-		fys = 350 - scy;         // flip Y about FB centre (matches tempest_sw fys=350-ry)
+		sy  = (cy * 11) >> 4;    // FILL scale 11/16
+		scy = sy - 352;          // - half (352)
+		fys = 360 - scy;         // flip Y about FB centre 360 (matches tempest_sw fys=360-ry, FB 720)
 		return fys;
 	endfunction
 
@@ -106,7 +106,7 @@ module tb_fb_replay;
 			if (r == 4) begin
 				fxs = mapx(ax); fys = mapy(ay);
 				@(posedge clk_12);
-				if (fxs >= 0 && fxs < 980 && fys >= 0 && fys < 700) begin
+				if (fxs >= 0 && fxs < 980 && fys >= 0 && fys < 720) begin
 					X <= fxs[9:0]; Y <= fys[9:0]; Z <= az[7:3]; RGB <= rgb[2:0];
 					BEAM_ON <= (rgb != 0);   // tempest_sw _e: rast_beam = |rgb && in_bounds
 					if (rgb != 0) nbeam++;
@@ -126,9 +126,10 @@ module tb_fb_replay;
 
 		// dump lit pixels from the displayed buffer (buf1 base 0x06057800)
 		fout = $fopen("fb_out.txt", "w");
-		n1=0; lit=0; b0 = 'h06057800;
+		// buf1 word range = 720-era offsets: 0x0605A000 .. 0x060B4000 (was 700: 0x06057800..0x060AF000)
+		n1=0; lit=0; b0 = 'h0605A000;
 		foreach (ddr.mem[a]) begin
-			if (a >= 'h06057800 && a < 'h060AF000 && ddr.mem[a] != 0) begin
+			if (a >= 'h0605A000 && a < 'h060B4000 && ddr.mem[a] != 0) begin
 				int byte0, x0, y0, x1, y1; logic [63:0] w;
 				w = ddr.mem[a]; n1++;
 				byte0 = (a - b0) * 8;

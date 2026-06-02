@@ -22,7 +22,7 @@ module tempest_sw (
 	input         osd_120hz_mode,
 	input  [1:0]  osd_rotate,       // HW bring-up: 0 / 90 / 180 / 270
 	input         osd_flip,         //             horizontal mirror
-	input  [1:0]  osd_scale,        //             0=/2 (safe), 1=x3/4, 2=x1
+	input  [1:0]  osd_scale,        //             UNUSED (content scale pinned to FILL=11/16 below)
 	input         osd_gate_bypass, //             1 = bypass the gate (native passthrough)
 	input  [1:0]  osd_persist,     // vector persistence: lists accumulated/buffer
 	                               //   0=3 (default,~_n), 1=4, 2=6, 3=2
@@ -131,14 +131,16 @@ module tempest_sw (
 	wire [9:0]  cx = {~tmp_x[9], tmp_x[8:0]};        // Tempest coords, centred 0..1023
 	wire [9:0]  cy = {~tmp_y[9], tmp_y[8:0]};
 
-	wire [2:0]  sc_num = (osd_scale == 2'd0) ? 3'd2 : // /2   (safe default)
-	                     (osd_scale == 2'd1) ? 3'd3 : // x3/4
-	                                           3'd4;   // x1
-	wire [12:0] cxs  = cx * sc_num;                  // up to 1023*4 = 4092
-	wire [12:0] cys  = cy * sc_num;
-	wire [9:0]  sx   = cxs[11:2];                     // >>2
-	wire [9:0]  sy   = cys[11:2];
-	wire [9:0]  half = {sc_num, 7'd0};               // sc_num*128 = scaled centre (256/384/512)
+	// FILL scale = 11/16 (0.6875).  This maps the FULL 1024-coord space to a 704px span
+	// (1024*11/16 = 704 <= the 720 FB height) -> the picture fills ~98% of the screen height
+	// (on 1080p, x1.5 -> ~1056/1080) and CANNOT clip vertically by construction (704 < 720).
+	// (osd_scale is pinned to FILL; the old Half /2 left a ~512-row letterbox in the 720 buffer.
+	//  Half/3-4/Full sc_num steps removed -- only Fill is offered, no OSD Vector Scale line.)
+	wire [13:0] cxs  = cx * 14'd11;                  // up to 1023*11 = 11253
+	wire [13:0] cys  = cy * 14'd11;
+	wire [9:0]  sx   = cxs[13:4];                    // >>4  (*11/16)
+	wire [9:0]  sy   = cys[13:4];
+	wire [9:0]  half = 10'd352;                      // scaled centre = 512*11/16 = 352
 
 	wire signed [12:0] scx = $signed({3'b000, sx}) - $signed({3'b000, half});
 	wire signed [12:0] scy = $signed({3'b000, sy}) - $signed({3'b000, half});
@@ -154,13 +156,14 @@ module tempest_sw (
 		if (osd_flip) rx = -rx;                      // horizontal mirror
 	end
 
-	// HW orientation baseline (FB-sim verified, orient "C"): flip Y ONLY.  fys=350-ry
+	// HW orientation baseline (FB-sim verified, orient "C"): flip Y ONLY.  fys=360-ry
 	// puts the attract right-side-up with the (c)ATARI/BONUS/CREDITS block along the
 	// bottom and FORWARD-reading text.  X is NOT flipped: fxs=490-rx mirrors the text
 	// (orient "D"), so keep fxs=490+rx.  OSD Rotate/Mirror adjust relative to this.
+	// Y centre = 360 (FB is now 720 tall, was 350 for 700).
 	wire signed [13:0] fxs = 14'sd490 + rx;          // X not flipped (490-rx would mirror text)
-	wire signed [13:0] fys = 14'sd350 - ry;          // flip Y -> right-side-up (was ry + 350)
-	wire in_bounds = (fxs >= 0) && (fxs < 14'sd980) && (fys >= 0) && (fys < 14'sd700);
+	wire signed [13:0] fys = 14'sd360 - ry;          // flip Y -> right-side-up; centre 360 (720/2)
+	wire in_bounds = (fxs >= 0) && (fxs < 14'sd980) && (fys >= 0) && (fys < 14'sd720);
 
 	wire [9:0]  rast_x   = fxs[9:0];
 	wire [9:0]  rast_y   = fys[9:0];
@@ -292,8 +295,8 @@ module tempest_sw (
 	wire [10:0] v_total  = 11'd860;
 	wire [10:0] hs_start = 11'd1004;
 	wire [10:0] hs_end   = 11'd1036;
-	wire [10:0] vs_start = 11'd703;
-	wire [10:0] vs_end   = 11'd709;
+	wire [10:0] vs_start = 11'd723;   // active+3 (FB height 720; was 703 for 700)
+	wire [10:0] vs_end   = 11'd729;   // active+9 (was 709)
 	wire h_end = (h_cnt == h_total);
 	wire v_end = (v_cnt == v_total);
 	always @(posedge clk_vid) begin
@@ -307,7 +310,7 @@ module tempest_sw (
 	assign hsync  = ~(h_cnt >= hs_start && h_cnt < hs_end); // active low
 	assign vsync  = ~(v_cnt >= vs_start && v_cnt < vs_end); // active low
 	assign hblank = (h_cnt >= 11'd980);
-	assign vblank = (v_cnt >= 11'd700);
+	assign vblank = (v_cnt >= 11'd720);   // FB active height 720 (was 700)
 
 	assign led = {7'd0, fifo_full_led};
 

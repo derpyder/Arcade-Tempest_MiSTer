@@ -9,8 +9,8 @@
 module tb_fb_trails;
 	parameter int BUSY_DUTY = 8;        // -gBUSY_DUTY=<0..16>
 	localparam [63:0] MARKER = 64'h00FFFFFF_00FFFFFF;  // both slots = white (stale-content stand-in)
-	localparam [28:0] BUF2 = 29'h060AF000;
-	localparam int    BUFW = 358400;    // words per buffer (700*4096/8)
+	localparam [28:0] BUF2 = 29'h060B4000;   // 720-era buf2 word offset (was 0x060AF000 for 700)
+	localparam int    BUFW = 368640;    // words per buffer (720*4096/8)
 
 	logic clk_sys=0, clk_12=0, reset=1;
 	always #10 clk_sys = ~clk_sys;
@@ -43,10 +43,10 @@ module tb_fb_trails;
 
 	// tempest_sw coord map, orient C (X not flipped, Y flipped) -- matches tempest_sw.sv.
 	function automatic int mapx(input int ax);
-		int cx, sx; cx = ax ^ 512; sx = cx >> 1; return 490 + (sx - 256);
+		int cx, sx; cx = ax ^ 512; sx = (cx * 11) >> 4; return 490 + (sx - 352);  // FILL 11/16
 	endfunction
 	function automatic int mapy(input int ay);
-		int cy, sy; cy = ay ^ 512; sy = cy >> 1; return 350 - (sy - 256);
+		int cy, sy; cy = ay ^ 512; sy = (cy * 11) >> 4; return 360 - (sy - 352);  // FILL 11/16, centre 360
 	endfunction
 
 	// clear-duration + FIFO instrumentation
@@ -72,7 +72,7 @@ module tb_fb_trails;
 			if (r == 4) begin
 				fxs = mapx(ax); fys = mapy(ay);
 				@(posedge clk_12);
-				if (fxs >= 0 && fxs < 980 && fys >= 0 && fys < 700) begin
+				if (fxs >= 0 && fxs < 980 && fys >= 0 && fys < 720) begin
 					X <= fxs[9:0]; Y <= fys[9:0]; Z <= az[7:3]; RGB <= rgb[2:0]; BEAM_ON <= (rgb != 0);
 				end else BEAM_ON <= 1'b0;
 			end

@@ -203,25 +203,28 @@ wire [1:0] ar = status[15:14];
 
 // Auto-detect optimal display size from HDMI output resolution.
 // Pick the largest clean scale factor that fits the output.
-// FB is 980×700. Integer scales: ×1=980×700, ×1.5=1470×1050, ×2=1960×1400, ×3=2940×2100
+// FB is 980×720. Integer scales: ×1=980×720, ×1.5=1470×1080, ×2=1960×1440, ×3=2940×2160.
+// 720 height makes EVERY step land on a real panel height (×3 = 2160 = exact 4K fill — the
+// whole reason for 700->720; 700×3=2100 letterboxed 4K).  Thresholds gate on OUTPUT height
+// and now equal the scaled height exactly (×3 needs >=2160, ×2 >=1440, ×1.5 >=1080).
 reg [12:0] auto_arx, auto_ary;
 always @(*) begin
-	if (HDMI_HEIGHT >= 2100) begin
-		// 4K (3840×2160): ×3 integer scale (4K not supported yet ;-)
+	if (HDMI_HEIGHT >= 2160) begin
+		// 4K (3840×2160): ×3 integer scale, fills vertical EXACTLY
 		auto_arx = 13'h1B7C;  // 0x1000 | 2940
-		auto_ary = 13'h1834;  // 0x1000 | 2100
-	end else if (HDMI_HEIGHT >= 1400) begin
+		auto_ary = 13'h1870;  // 0x1000 | 2160
+	end else if (HDMI_HEIGHT >= 1440) begin
 		// 1440p (2560×1440): ×2 integer scale
 		auto_arx = 13'h17A8;  // 0x1000 | 1960
-		auto_ary = 13'h1578;  // 0x1000 | 1400
-	end else if (HDMI_HEIGHT >= 1050) begin
+		auto_ary = 13'h15A0;  // 0x1000 | 1440
+	end else if (HDMI_HEIGHT >= 1080) begin
 		// 1080p (1920×1080): ×1.5 scale (3:2)
 		auto_arx = 13'h15BE;  // 0x1000 | 1470
-		auto_ary = 13'h141A;  // 0x1000 | 1050
+		auto_ary = 13'h1438;  // 0x1000 | 1080
 	end else begin
 		// 720p (1280×720) or smaller: 1:1 pixel perfect
 		auto_arx = 13'h13D4;  // 0x1000 | 980
-		auto_ary = 13'h12BC;  // 0x1000 | 700
+		auto_ary = 13'h12D0;  // 0x1000 | 720
 	end
 end
 
@@ -232,7 +235,7 @@ assign VIDEO_ARX = (ar == 0) ? auto_arx :  // Optimized (auto-detect)
                                13'h13D4;   // Pixel Perfect (1:1, 980)
 
 assign VIDEO_ARY = (ar == 0) ? auto_ary :  // Optimized (auto-detect)
-                               13'h12BC;   // Pixel Perfect (1:1, 700)
+                               13'h12D0;   // Pixel Perfect (1:1, 720)
 
 // 120Hz MODE — SAFE ACTIVATION
 // The HPS restores saved status bits (including status[25]=120Hz ON)
@@ -351,6 +354,7 @@ wire  [7:0] ioctl_index;
 wire [15:0] joy_0, joy_1;
 wire [15:0] joy = joy_0 | joy_1;
 wire [15:0] joy_l_analog_0;
+wire  [8:0] spinner_0, spinner_1;   // real USB spinner devices (hps_io)
 wire        rom_download = ioctl_download && !ioctl_index;
 wire        nvram_download = ioctl_download && (ioctl_index == 8'd4);
 wire [24:0] dl_addr = ioctl_addr;
@@ -381,7 +385,9 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.joystick_0(joy_0),
 	.joystick_1(joy_1),
-	.joystick_l_analog_0(joy_l_analog_0)
+	.joystick_l_analog_0(joy_l_analog_0),
+	.spinner_0(spinner_0),         // real USB spinner P1: [7:0]=signed delta, [8]=toggle-on-update
+	.spinner_1(spinner_1)          // real USB spinner P2
 );
 
 // DIP switch loading — currently unused (game settings via Test Mode / NVRAM)
@@ -394,20 +400,51 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 reg [7:0] sw[8];
 always @(posedge clk_12) if (ioctl_wr && (ioctl_index==254) && !ioctl_addr[24:3]) sw[ioctl_addr[2:0]] <= ioctl_dout;
 
-// Analog spinner -> 4-bit knob counter via a rate-proportional NCO (full throw = max
-// spin, feather = fine; ~10% deadzone).  D-pad L/R is the fixed-rate fallback.
+// ===== Spinner -> 4-bit knob counter (t_spin) =====
+// MAME models Tempest's knob as a 4-bit (0x0f) up/down count read on IN1_DSW0[3:0]
+// (atari/tempest.cpp: IPT_DIAL, FULL_TURN_COUNT 72, into POKEY1).  The game reads this
+// nibble and deltas it; t_spin IS that counter.  Three input sources, in priority order:
+//
+//   1. REAL USB spinner (hps_io spinner_0): the authentic path.  spinner_0[8] toggles on
+//      every update; on a toggle edge, add the signed delta spinner_0[7:0] to t_spin.
+//      Delta is scaled down (>>>2) so a physical detent maps to a sensible knob step.
+//   2. Left analog stick: rate-proportional NCO (full throw = fast, feather = fine; ~10%
+//      deadzone) — the source we can bench-test without a physical spinner.
+//   3. D-pad L/R: fixed-rate fallback.
+//
+// Player-select ($60E0 D2, latched as player_sel in tempest.vhd) chooses P1/P2 knob on the
+// real hardware; with a single MiSTer spinner we feed spinner_0 (P1) and also fold in
+// spinner_1 so a 2nd device works.  All sources converge on the SAME counter MAME reads.
 wire signed [7:0] t_ax       = $signed(joy_l_analog_0[7:0]);
 wire        [7:0] t_amag_raw = t_ax[7] ? (~joy_l_analog_0[7:0] + 8'd1) : joy_l_analog_0[7:0];
 wire        [7:0] t_amag     = (t_amag_raw > 8'd12) ? t_amag_raw : 8'd0;
 wire        [7:0] t_rate     = (t_amag != 8'd0) ? t_amag : ((joy[1]|joy[0]) ? 8'd56 : 8'd0);
 wire              t_inc      = (t_amag != 8'd0) ? ~t_ax[7] : joy[0];
+
 reg  [3:0]  t_spin = 4'd0;
 reg  [22:0] t_phase = 23'd0;
 reg         t_pamsb = 1'b0;
+
+// Real-spinner edge detect: each device's bit 8 toggles on every new delta.  XOR the two
+// toggle bits (NOT OR) so a single-device update ALWAYS produces a detectable edge — OR can
+// mask an update (proven in sim: OR caught 2/5, XOR 4/5).  One physical spinner is the norm;
+// the only XOR miss is both devices updating in the same tick, which one knob can't do.
+wire        sp_tgl  = spinner_0[8] ^ spinner_1[8];
+reg         sp_tgl_d = 1'b0;
+wire signed [7:0] sp_delta = $signed(spinner_0[7:0]) + $signed(spinner_1[7:0]);
+
 always @(posedge clk_12) begin
-	t_phase  <= t_phase + t_rate;
+	sp_tgl_d <= sp_tgl;
 	t_pamsb  <= t_phase[22];
-	if (t_phase[22] & ~t_pamsb) t_spin <= t_spin + (t_inc ? 4'd1 : -4'd1);
+	t_phase  <= t_phase + t_rate;
+
+	if (sp_tgl ^ sp_tgl_d) begin
+		// 1) REAL spinner update -> add its (scaled) signed delta to the knob counter
+		t_spin <= t_spin + sp_delta[7:2];        // >>>2: physical detents -> knob steps
+	end else if (t_phase[22] & ~t_pamsb) begin
+		// 2/3) analog-stick NCO tick (or D-pad fallback rolled into t_rate/t_inc)
+		t_spin <= t_spin + (t_inc ? 4'd1 : -4'd1);
+	end
 end
 
 // Buttons (CONF_STR J1: Fire,Superzapper,FireDn,FireUp,Start1,Start2,Coin,Pause -> joy[4..11])
@@ -485,7 +522,7 @@ tempest_sw tempest_core
 	.osd_120hz_mode(osd_120hz_mode),
 	.osd_rotate(status[6:5]),
 	.osd_flip(status[7]),
-	.osd_scale(2'd0),              // Vector Scale fixed at Half (OSD option removed)
+	.osd_scale(2'd0),              // UNUSED: content scale pinned to FILL (11/16) inside tempest_sw
 	.osd_gate_bypass(status[10]),
 	.osd_persist(status[29:28]),   // Persistence: 0=3(default ~_n),1=4,2=6,3=2 lists/frame
 

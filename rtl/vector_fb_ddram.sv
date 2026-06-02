@@ -4,7 +4,7 @@
 // Vector-to-raster interface convention (X/Y/Z/RGB/BEAM_ON/BEAM_ENA)
 // follows the pattern established by Dave Wood's Black Widow renderer.
 //
-// Renders Atari AVG vector output into a 980×700 8bpp indexed-color
+// Renders Atari AVG vector output into a 980×720 8bpp indexed-color
 // framebuffer stored in DDRAM, using MISTER_FB for display.
 //
 //   Vector Generator (12 MHz)         DDRAM Controller (50 MHz)
@@ -28,8 +28,8 @@
 //             byte enables (no read-modify-write needed).
 //
 // Triple buffering:
-//   980×700 framebuffers (stride 1024) at DDRAM byte offsets 0x30000000,
-//   0x300B0000, 0x30160000 (700 KB each, ~2.1 MB total):
+//   980×720 framebuffers (stride 4096) at DDRAM byte offsets 0x30000000,
+//   0x302D0000, 0x305A0000 (0x2D0000 each, ~8.8 MB total):
 //     display_buf      — being scanned out by the MiSTer scaler
 //     draw_buf         — receiving new pixels from the pipeline
 //     ready_buf        — completed frame waiting for next VBL swap
@@ -96,7 +96,7 @@ module vector_fb_ddram (
 	assign FB_EN     = 1'b1;
 	assign FB_FORMAT = 5'b00110; // 32bpp RGBA8888 ([4]=0 RGB; ascal reads byte0=R)
 	assign FB_WIDTH  = 980;
-	assign FB_HEIGHT = 700;
+	assign FB_HEIGHT = 720;      // 720 (was 700): 720*3=2160 = exact 4K integer scale (700*3=2100 missed it)
 	assign FB_STRIDE = 4096;     // 980*4=3920 bytes/line, padded to 2^12 (Y<<12 addressing)
 	assign FB_FORCE_BLANK = 1'b0;
 
@@ -133,20 +133,20 @@ module vector_fb_ddram (
 
 	// FB_BASE outputs the ACTIVE buffer for display (byte address),
 	// while DDRAM_ADDR is a 64-bit word index (8 bytes per unit).
-	// 32bpp buffers are 700*4096 = 0x2BC000 bytes (0x57800 words) each.
-	assign FB_BASE = DIAG_FB_SCANOUT      ? 32'h302BC000 :  // DIAG: force buf1 (reset-cleared)
-	                 (display_buf == 2'd2) ? 32'h30578000 :
-	                 (display_buf == 2'd1) ? 32'h302BC000 :
+	// 32bpp buffers are 720*4096 = 0x2D0000 bytes (0x5A000 words) each.
+	assign FB_BASE = DIAG_FB_SCANOUT      ? 32'h302D0000 :  // DIAG: force buf1 (reset-cleared)
+	                 (display_buf == 2'd2) ? 32'h305A0000 :
+	                 (display_buf == 2'd1) ? 32'h302D0000 :
 	                                         32'h30000000;
 
 	// Drawing occurs on the INACTIVE buffer
-	wire [28:0] draw_base_word = (draw_buf == 2'd2) ? 29'h060AF000 :
-	                             (draw_buf == 2'd1) ? 29'h06057800 :
+	wire [28:0] draw_base_word = (draw_buf == 2'd2) ? 29'h060B4000 :
+	                             (draw_buf == 2'd1) ? 29'h0605A000 :
 	                                                  29'h06000000;
 
 	// Clear target buffer immediately after a swap
-	wire [28:0] clear_base_word = (clear_target_buf == 2'd2) ? 29'h060AF000 :
-	                              (clear_target_buf == 2'd1) ? 29'h06057800 :
+	wire [28:0] clear_base_word = (clear_target_buf == 2'd2) ? 29'h060B4000 :
+	                              (clear_target_buf == 2'd1) ? 29'h0605A000 :
 	                                                           29'h06000000;
 
 	// ------------------------------------------------------------------------
@@ -353,13 +353,13 @@ module vector_fb_ddram (
 	assign DDRAM_BE = ddram_be_reg;
 	assign DDRAM_BURSTCNT = ddram_burst_reg;
 	
-	// SAFETY CLAMP — covers 3x 32bpp buffers (word 0x06000000..0x060AF000+0x57800)
-	wire safe_address = (ddram_addr_reg >= 29'h06000000) && (ddram_addr_reg <= 29'h0610FFFF);
+	// SAFETY CLAMP — covers 3x 32bpp buffers (word 0x06000000..0x060B4000+0x5A000 = 0x0610DFFF)
+	wire safe_address = (ddram_addr_reg >= 29'h06000000) && (ddram_addr_reg <= 29'h0610DFFF);
 	assign DDRAM_WE = ddram_we_reg && safe_address;
 
 	// Clear State
 	reg clearing;
-	reg [18:0] clear_addr; // 358400 words = 700*4096 bytes = ~2.87MB buffer
+	reg [18:0] clear_addr; // 368640 words = 720*4096 bytes = ~2.95MB buffer (368639 fits in 19 bits)
 
 	// stage2_data must update ONLY when the read pipeline actually advances (consumes
 	// stage2), so it stays paired with stage2_valid.  The original unconditional
@@ -383,22 +383,23 @@ module vector_fb_ddram (
 	// OFF so the default Phase-3 build is the proven single-word clear.
 	localparam       USE_BURST_CLEAR = 1'b1;   // burst the clear (16 words/cmd) so it finishes
 	                                           // under DDR contention; now verifiable in the FB sim
-	localparam [7:0] CLEAR_BURST     = 8'd16;   // 358400/16 = 22400 bursts (exact)
+	localparam [7:0] CLEAR_BURST     = 8'd16;   // 368640/16 = 23040 bursts (exact)
 	reg [7:0] clear_beat;                        // beat within the current clear burst
 
-	// --- ROW-RANGE clear (projectile-flicker fix) ---------------------------------------
-	// The /2-scaled content only occupies rows ~95..606 of the 700-row buffer.  Clearing the
-	// FULL buffer (~10ms) leaves too little beam-on time at 60Hz, so the END of the display list
-	// (the late-drawn projectiles) gets cut off when the list grows from firing -> NES-style
-	// flicker.  Clear ONLY rows 88..613 per frame (~7.5ms) -> the paint window grows ~6.6->9.1ms
-	// -> the whole list (projectiles included) draws every frame.  BOOT: the first 4 clears stay
-	// FULL so every buffer's unused rows get zeroed once (else they'd show DDR garbage).
+	// --- FULL-buffer clear (was ROW-RANGE for the Half-scale letterbox) ------------------
+	// At FILL scale (11/16) the content spans ~rows 9..712 = nearly the whole 720 buffer, so the
+	// old row-range optimization (clear only rows 96..623) would leave the top/bottom UNCLEARED ->
+	// trails.  No letterbox to exploit anymore -> clear the FULL buffer every frame.  This fits the
+	// present_gate 10 ms beam-off window at realistic (<=25%) DDR contention (~7.4-9.8 ms); any
+	// overrun under heavier load is masked by the persistence accumulation (N>=3 refills early-beam
+	// drops) -- the same mechanism the shipped core already relies on.  The ROW constants are set
+	// EQUAL to the FULL constants so the clr_full=0 path is identical (FSM logic untouched).
 	reg [2:0] clear_cnt = 3'd0;
-	localparam [18:0] CLR_ROW_LO         = 19'd45056;    // row 88 * 512 words/row
-	localparam [18:0] CLR_BURST_END_FULL = 19'd358384;   // 358400-16
-	localparam [18:0] CLR_BURST_END_ROW  = 19'd314352;   // (614*512)-16  (last burst of rows 88..613)
-	localparam [18:0] CLR_SINGLE_END_FULL= 19'd358399;
-	localparam [18:0] CLR_SINGLE_END_ROW = 19'd314367;   // (614*512)-1
+	localparam [18:0] CLR_ROW_LO         = 19'd0;        // FILL: full buffer (was row 96 = 49152)
+	localparam [18:0] CLR_BURST_END_FULL = 19'd368624;   // 368640-16
+	localparam [18:0] CLR_BURST_END_ROW  = 19'd368624;   // == FULL (no row-range at fill scale)
+	localparam [18:0] CLR_SINGLE_END_FULL= 19'd368639;
+	localparam [18:0] CLR_SINGLE_END_ROW = 19'd368639;   // == FULL
 `ifdef SIM_ROWCLEAR
 	localparam [2:0] CLR_FULL_N = 3'd1;   // sim: only the reset clear is full -> exercise row-range fast
 `else
@@ -574,7 +575,7 @@ module vector_fb_ddram (
 						pixel_x = stage2_data[9:0];
 						
 						// Safety bounds check (defense-in-depth)
-						if (pixel_x < 10'd980 && pixel_y < 10'd700) begin
+						if (pixel_x < 10'd980 && pixel_y < 10'd720) begin
 							// byte offset within buffer = Y*4096 + X*4 (stride 4096 = 2^12)
 							computed_pixel_addr = {pixel_y, 12'd0} + {pixel_x, 2'd0};
 							chan = {pixel_z, pixel_z[4:2]};  // == old palette channel_val

@@ -6,9 +6,12 @@ game module onto the proven **Star Wars** color-vector chassis
 ([Videodr0me/Arcade-StarWars_MiSTer](https://github.com/Videodr0me/Arcade-StarWars_MiSTer)),
 reusing its DDR3 vector framebuffer, display path, audio chain, and OSD.
 
-> **Status:** boots and is playable on real DE10-Nano hardware — spinner, fire,
-> superzapper, coins, and audio all confirmed, and the display is stable (see
-> [Vector presentation](#vector-presentation--the-flicker-fix)).
+> **Status:** boots and is playable on real DE10-Nano hardware — fire,
+> superzapper, coins, audio, and a stable flicker-free display all confirmed, and
+> the picture fills the screen with clean integer scaling up to 4K (see
+> [Vector presentation](#vector-presentation--the-flicker-fix)). Rotation via the
+> analog stick is confirmed; a physical USB **spinner is implemented but untested**
+> (the developer doesn't own one) — see [Controls](#controls).
 
 > ⚠️ **ROMs required — not included.** This core does nothing without the Tempest
 > romset. You must supply **`tempest.zip`** (MAME `tempest`) in your MiSTer's
@@ -85,23 +88,33 @@ Launch the MRA from the MiSTer arcade menu.
 
 ## Controls
 
+Tempest's tube is controlled by a knob (a 4-bit up/down encoder in the real
+hardware). This core feeds that knob from any of three sources, in priority order:
+
 | Input | Action |
 |---|---|
-| **Spinner** (or paddle) | Rotate around the tube |
+| **Spinner / paddle** (USB) | Rotate around the tube — the authentic control |
+| **Left analog stick** | Rotate (rate-proportional: full throw = fast, feather = fine) |
+| **D-pad ← / →** | Rotate (fixed rate) |
 | **Fire** | Fire |
 | **Superzapper** | Superzapper (screen-clear, limited) |
 | **Start 1P / 2P** | Start |
 | **Coin** | Insert coin |
 
-The MRA also maps these to a standard pad (Fire / Superzapper / Start / Coin); a
-real spinner gives the intended control.
+> **Note on the spinner:** real USB-spinner support is implemented to match MAME's
+> Tempest knob model, but the developer does **not** own a physical spinner, so it
+> has only been verified via the analog-stick path (which drives the same internal
+> knob counter). If you have a spinner/paddle, please try it and
+> [report back](https://github.com/derpyder/Arcade-Tempest_MiSTer/issues) —
+> especially direction and sensitivity, which are one-line tweaks if they feel off.
 
 ## OSD options
 
 Beyond the standard MiSTer video/scaler options, this core exposes:
 
-- **Aspect ratio** — *Optimized* (auto integer scale to your output) or
-  *Pixel Perfect* (1:1).
+- **Aspect ratio** — *Optimized* (auto integer scale: the 980×720 frame is scaled
+  ×1/×1.5/×2/×3 to best fit your output — ×3 fills 4K vertically exactly) or
+  *Pixel Perfect* (1:1). The vector image is drawn to fill the frame either way.
 - **Rotate / Flip** — orientation relative to the built-in baseline, for portrait
   cabinet monitors.
 - **Frame Gate** — *On* (normal) presents via the persistence gate; *Off* is a
