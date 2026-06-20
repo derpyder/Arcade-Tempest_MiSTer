@@ -307,6 +307,7 @@ localparam CONF_STR = {
 	"OA,Frame Gate,On,Off;",
 	"OST,Persistence,3 (default),4,6,2;",
 	"OU,Spinner Reverse,Off,On;",
+	"OBD,Spinner Sensitivity,Default,Low,Lower,High,Higher;",
 	"-;",
 	"DIP;",
 	"-;",
@@ -505,8 +506,23 @@ reg  [15:0] sp_pace  = 16'd0;            // pace counter (widened for PACE_DIV)
 // drags (small per-poll deltas now accumulate 3:4 instead of 1:1).
 // Retune one spot: calmer 1/2 = ({1'b0,sp_mag}+{9'd0,sp_frac1})>>1 ; original 1/1 = sp_mag.
 reg  [1:0]  sp_frac   = 2'd0;            // carried 1/4-steps (lossless)
-wire [10:0] sp_scaled = {1'b0,sp_mag} + {sp_mag,1'b0} + {9'd0, sp_frac}; // mag*3 + carry
-wire [8:0]  sp_steps  = sp_scaled[10:2];                                 // >>2  -> gain 3/4
+// OSD Spinner Sensitivity (status[13:11]): scales the INPUT gain via a selectable numerator over a
+// fixed /4 denominator (so the lossless 2-bit carry is preserved).  Index 0 = Default = x3/4 (the
+// HW-tuned value, identical to the previous fixed mag*3>>2); higher = more on-screen rotation per
+// unit of spinner/mouse motion.  The direction-safe pacer (PACE_DIV) and glide cap (STEP_CAP) are
+// deliberately UNCHANGED -- sensitivity only sets how fast the +-1 step queue fills.
+reg  [3:0] sp_gain_num;                                                  // gain = sp_gain_num / 4
+always @(*) case (status[13:11])
+	3'd0: sp_gain_num = 4'd3;   // Default  x3/4 (current)
+	3'd1: sp_gain_num = 4'd2;   // Low      x1/2
+	3'd2: sp_gain_num = 4'd1;   // Lower    x1/4
+	3'd3: sp_gain_num = 4'd4;   // High     x1
+	3'd4: sp_gain_num = 4'd6;   // Higher   x3/2
+	default: sp_gain_num = 4'd3;
+endcase
+wire [12:0] sp_scaled = sp_mag * sp_gain_num + {11'd0, sp_frac};         // |delta|*num + carry
+wire [10:0] sp_full   = sp_scaled[12:2];                                 // >>2  -> gain num/4
+wire [8:0]  sp_steps  = (sp_full > 11'd511) ? 9'd511 : sp_full[8:0];     // 9-bit (STEP_CAP=14 caps anyway)
 wire [1:0]  sp_remn   = sp_scaled[1:0];                                  // remainder, kept
 
 always @(posedge clk_12) begin
@@ -593,20 +609,9 @@ assign AUDIO_S = 0;   // Tempest POKEY audio is UNSIGNED (pokey.vhd: 0=silence..
                       //  -> torn waveform = harsh/thin "half the chip" sound.  Both POKEYs are fine.)
 wire vgade;
 
-wire [7:0] m_dsw0 = {
-	~status[16],       // [7] Freeze (OG, 0=Off, 1=On -> ~0 = 1 = Off)
-	status[13],        // [6] Demo Sounds (OD, 0=On, 1=Off)
-	status[12:11],     // [5:4] Bonus Shields (OBC)
-	status[10:9] + 2'd1,   // [3:2] Difficulty (O9A, rotated +1: 0=Mod,1=Hard,2=Hrd+,3=Easy)
-	status[8:7]        // [1:0] Starting Shields (O78)
-};
-
-wire [7:0] m_dsw1 = {
-	status[24:22],     // [7:5] Bonus Coin Adder (OMNO)
-	status[21],        // [4] Left Coin (OL)
-	status[20:19],     // [3:2] Right Coin (OJK)
-	status[18:17] + 2'd2   // [1:0] Coinage (OHI, rotated +2: 0=1P/C,1=2C/P,2=Free,3=2P/C)
-};
+// (Removed dead Star Wars m_dsw0/m_dsw1 leftovers: they were never read by the Tempest core, and
+//  they referenced status bits now reused by Spinner Sensitivity (status[13:11]).  Tempest's real
+//  DIPs come from the MRA via sw[0..2] -> tempest_in1/in2 + dsw1/dsw2.)
 
 tempest_sw tempest_core
 (

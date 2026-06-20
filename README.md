@@ -127,6 +127,11 @@ Beyond the standard MiSTer video/scaler options, this core exposes:
   more resistance to dropped beams; lower = crisper but flickerier.
 - **Spinner Reverse** — flip the spinner/mouse rotation direction (Off / On), so a
   clockwise turn of your device matches clockwise on the tube.
+- **Spinner Sensitivity** — how much on-screen rotation you get per unit of
+  spinner/mouse movement: *Default* (the tuned value) / *Low* (×½) / *Lower* (×¼) /
+  *High* (×1) / *Higher* (×1½). This scales the input gain only; the direction-safe
+  pacing that keeps fast spins from reversing is unchanged, so all settings stay
+  direction-correct.
 
 ## Known limitations
 
