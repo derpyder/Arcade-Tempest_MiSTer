@@ -14,8 +14,8 @@
 	<setname>tempest</setname>
 	<parent>tempest</parent>
 	<mameversion>0287</mameversion>
-	<rbf>Arcade-Tempest</rbf>
-	<about>Tempest on the Star Wars DDR-framebuffer chassis (1.1). Crisp single-frame vectors via the proven SW vector_fb_ddram rasterizer.</about>
+	<rbf>Tempest</rbf>
+	<about>Tempest on the Star Wars DDR-framebuffer chassis. Crisp flicker-free vectors via the proven SW vector_fb_ddram rasterizer + phosphor-persistence present-gate. Spinner/mouse/stick rotation; DSW1/DSW2 + difficulty/cabinet DIPs all wired (match MAME tempest).</about>
 
 	<resolution>31kHz</resolution>
 	<rotation>horizontal</rotation>
@@ -41,19 +41,21 @@
 	  HDL port mirrors it, so the PROMs are never read.
 	-->
 
-	<switches default="00,00,10">
-		<!-- DSW1 @ $0D00 (N13). sw[0] -->
+	<switches default="00,00,17">
+		<!-- DSW1 @ $0D00 (N13). sw[0]. Defaults match MAME tempest (0x00). -->
 		<dip bits="0,1" ids="1C_1C,2C_1C,Free Play,1C_2C" name="Coinage"></dip>
 		<dip bits="2,3" ids="*1,*4,*5,*6" name="Right Coin"></dip>
 		<dip bits="4" ids="*1,*2" name="Left Coin"></dip>
-		<dip bits="5,6,7" ids="None,1 each 2,1 each 4,1 each 5,2 each 4,1 each 3,Freeze,Freeze" name="Bonus Coins"></dip>
-		<!-- DSW2 @ $0E00 (L12). sw[1] -->
+		<dip bits="5,6,7" ids="None,1 each 2,1 each 4,2 each 4,1 each 5,1 each 3,Freeze,Freeze" name="Bonus Coins"></dip>
+		<!-- DSW2 @ $0E00 (L12). sw[1]. Defaults match MAME tempest (0x00). -->
 		<dip bits="8" ids="1 Credit,2 Credit" name="Minimum"></dip>
 		<dip bits="9,10" ids="English,French,German,Spanish" name="Language"></dip>
-		<dip bits="11,12,13" ids="10000,20000,30000,40000,50000,60000,70000,None" name="Bonus Life"></dip>
-		<dip bits="14,15" ids="3,2,4,5" name="Lives"></dip>
-		<!-- Difficulty/cabinet read via POKEY pots (IN1_DSW0/IN2). sw[2] -->
-		<dip bits="16,17" ids="Medium1,Hard,Easy,Medium2" name="Difficulty"></dip>
+		<dip bits="11,12,13" ids="20000,10000,30000,40000,50000,60000,70000,None" name="Bonus Life"></dip>
+		<dip bits="14,15" ids="3,4,5,2" name="Lives"></dip>
+		<!-- Difficulty/rating/cabinet read via POKEY pots (IN1_DSW0/IN2). sw[2].
+		     Default 0x17 = MAME default: Medium1, Rating "1 3 5 7 9", Upright. -->
+		<dip bits="16,17" ids="Medium2,Hard,Easy,Medium1" name="Difficulty"></dip>
+		<dip bits="18" ids="Tied to High Score,1 3 5 7 9" name="Rating"></dip>
 		<dip bits="20" ids="Cocktail,Upright" name="Cabinet"></dip>
 	</switches>
 
@@ -67,7 +69,7 @@
 		<part crc="5903af03" name="136002-125.d7"></part>
 		</rom>
 
-	<remark>Tempest 1.1 — Star Wars chassis (DDR framebuffer). Hiscore not persisted (EAROM stubbed).</remark>
+	<remark>Tempest — Star Wars chassis (DDR framebuffer). Hiscore not persisted (EAROM stubbed).</remark>
 
-	<mratimestamp>20260529000000</mratimestamp>
+	<mratimestamp>20260620000000</mratimestamp>
 </misterromdescription>
